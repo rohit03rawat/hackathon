@@ -21,7 +21,7 @@ api_key = "AIzaSyAn16yV68eU1CEZpZ35YW4FhnikMnEIJWI"  # Replace with your actual 
 genai.configure(api_key=api_key)
 
 # Initialize Gemini model
-model = genai.GenerativeModel('gemini-pro')
+model = genai.GenerativeModel('gemini-2.0-flash')
 
 # Store conversation history
 conversations = {}
