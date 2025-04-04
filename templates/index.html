@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mental Health Support Chat</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f0f2f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .chat-container {
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+        .chat-header {
+            background-color: #4e8cff;
+            color: white;
+            padding: 15px 20px;
+        }
+        .chat-header h1 {
+            margin: 0;
+            font-size: 18px;
+        }
+        .chat-disclaimer {
+            font-size: 12px;
+            opacity: 0.8;
+            margin-top: 5px;
+        }
+        .messages {
+            padding: 20px;
+            height: 400px;
+            overflow-y: auto;
+        }
+        .message {
+            margin-bottom: 15px;
+            padding: 10px 15px;
+            border-radius: 18px;
+            max-width: 75%;
+            word-wrap: break-word;
+        }
+        .user-message {
+            background-color: #e5e5ea;
+            color: #000;
+            margin-left: auto;
+        }
+        .bot-message {
+            background-color: #4e8cff;
+            color: white;
+        }
+        .input-area {
+            display: flex;
+            padding: 15px;
+            border-top: 1px solid #e5e5ea;
+        }
+        #message-input {
+            flex: 1;
+            padding: 10px 15px;
+            border: 1px solid #e5e5ea;
+            border-radius: 20px;
+            outline: none;
+        }
+        #send-button {
+            background-color: #4e8cff;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            margin-left: 10px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="chat-container">
+            <div class="chat-header">
+                <h1>Mental Health Support Chat</h1>
+                <div class="chat-disclaimer">
+                    This is a supportive AI assistant, not a replacement for professional help.
+                </div>
+            </div>
+            <div class="messages" id="chat-messages">
+                <!-- Messages will be added here dynamically -->
+                <div class="message bot-message">
+                    Hello! I'm here to listen and provide support. How are you feeling today?
+                </div>
+            </div>
+            <div class="input-area">
+                <input type="text" id="message-input" placeholder="Type your message here...">
+                <button id="send-button">➤</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Generate a random user ID for this session
+        const userId = 'user_' + Math.random().toString(36).substring(2, 12);
+        
+        document.addEventListener('DOMContentLoaded', function() {
+            const chatMessages = document.getElementById('chat-messages');
+            const messageInput = document.getElementById('message-input');
+            const sendButton = document.getElementById('send-button');
+
+            function addMessage(message, isUser) {
+                const messageElement = document.createElement('div');
+                messageElement.classList.add('message');
+                messageElement.classList.add(isUser ? 'user-message' : 'bot-message');
+                messageElement.textContent = message;
+                chatMessages.appendChild(messageElement);
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            }
+
+            async function sendMessage() {
+                const message = messageInput.value.trim();
+                if (!message) return;
+
+                // Add user message to chat
+                addMessage(message, true);
+                messageInput.value = '';
+
+                try {
+                    // Send message to server
+                    const response = await fetch('/api/chat', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            user_id: userId,
+                            message: message
+                        })
+                    });
+
+                    const data = await response.json();
+                    
+                    // Add bot response to chat
+                    addMessage(data.response, false);
+                } catch (error) {
+                    console.error('Error:', error);
+                    addMessage('Sorry, I encountered an error. Please try again.', false);
+                }
+            }
+
+            // Event listeners
+            sendButton.addEventListener('click', sendMessage);
+            messageInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    sendMessage();
+                }
+            });
+        });
+    </script>
+</body>
+</html>
