@@ -1,6 +1,6 @@
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, render_template
 import google.generativeai as genai
 from dotenv import load_dotenv
@@ -26,7 +26,6 @@ for row in rows:
 cur.close()
 conn.close()
 
-global model
 # Load environment variables
 load_dotenv()
 
@@ -34,10 +33,6 @@ load_dotenv()
 app = Flask(__name__)
 
 # Configure Google Gemini API
-# Replace this line
-api_key = os.getenv("GEMINI_API_KEY")
-
-# With this
 api_key = "AIzaSyAn16yV68eU1CEZpZ35YW4FhnikMnEIJWI"  # Replace with your actual API key
 genai.configure(api_key=api_key)
 
@@ -46,6 +41,10 @@ model = genai.GenerativeModel('gemini-2.0-flash')
 
 # Store conversation history
 conversations = {}
+# Store user profiles
+user_profiles = {}
+# Track session activity
+session_activity = {}
 
 def create_system_prompt():
     """Create the system prompt for the therapy chatbot"""
@@ -92,9 +91,6 @@ def get_crisis_response():
 def generate_response(user_id, message):
     """Generate a response using the Gemini API with simplified approach"""
     
-    # Move global declaration to the top of the function
-   
-    
     # Check for crisis indicators first
     if check_for_crisis(message):
         return get_crisis_response()
@@ -103,24 +99,38 @@ def generate_response(user_id, message):
     if user_id not in conversations:
         conversations[user_id] = []
     
+    # Update session activity timestamp
+    session_activity[user_id] = datetime.now()
+    
     conversation_history = conversations[user_id]
+    
+    # Get user profile context if available
+    user_context = ""
+    if user_id in user_profiles:
+        user_context = f"""
+        User Profile Information:
+        - Primary emotions: {', '.join(user_profiles[user_id].get('emotions', ['Unknown']))}
+        - Main concerns: {', '.join(user_profiles[user_id].get('concerns', ['Unknown']))}
+        - Previous session summary: {user_profiles[user_id].get('last_summary', 'No previous sessions')}
+        - Suggested approach: {user_profiles[user_id].get('suggestion', '')}
+        """
     
     # Create a prompt that includes system instructions and recent context
     system_instructions = create_system_prompt()
     
     # Build a context string with recent conversation history
     context = ""
-    for entry in conversation_history[-3:]:  # Use last 3 messages for context
+    for entry in conversation_history[-5:]:  # Use last 5 messages for context
         context += f"User: {entry['user_message']}\n"
         if "bot_response" in entry:
             context += f"Assistant: {entry['bot_response']}\n"
     
     # Construct the final prompt
-    final_prompt = f"{system_instructions}\n\nConversation History:\n{context}\n\nUser: {message}\nAssistant:"
+    final_prompt = f"{system_instructions}\n\n{user_context}\n\nConversation History:\n{context}\n\nUser: {message}\nAssistant:"
     
     try:
-        print("Sending simplified request to Gemini API...")
-        response = model.generate_content(final_prompt)  # Model is used after global declaration
+        print("Sending request to Gemini API...")
+        response = model.generate_content(final_prompt)
         bot_response = response.text
         print(f"Received response: {bot_response[:50]}...")  # Print first 50 chars
         
@@ -131,6 +141,11 @@ def generate_response(user_id, message):
             "bot_response": bot_response
         })
         
+        # Check if we should analyze the conversation (session length threshold)
+        if len(conversation_history) >= 10:  # After 10 exchanges
+            # Trigger analysis in the background (would be async in production)
+            analyze_conversation(user_id)
+        
         return bot_response
     
     except Exception as e:
@@ -138,9 +153,95 @@ def generate_response(user_id, message):
         print(error_msg)
         return f"I'm having trouble responding right now. Technical details: {str(e)}"
 
+def analyze_conversation(user_id):
+    """Analyze the conversation and update user profile"""
+    if user_id not in conversations or len(conversations[user_id]) < 3:
+        return  # Not enough conversation to analyze
+    
+    try:
+        # Build the full conversation text for analysis
+        conversation_text = ""
+        for entry in conversations[user_id][-10:]:  # Use last 10 messages
+            if "user_message" in entry:
+                conversation_text += f"User: {entry['user_message']}\n"
+            if "bot_response" in entry:
+                conversation_text += f"Assistant: {entry['bot_response']}\n"
+        
+        # Create analysis prompt
+        analysis_prompt = f"""
+        System: Analyze the following mental health support conversation. Extract key information about 
+        the user's emotional state, concerns, and progress. Format your response as structured data.
 
+        Conversation: 
+        {conversation_text}
+
+        Please provide:
+        1. Primary emotions detected (list up to 3)
+        2. Main concerns/issues discussed (list up to 3)
+        3. Potential triggers identified
+        4. Coping strategies mentioned or suggested
+        5. Brief summary of the conversation (2-3 sentences)
+        6. Level of distress detected (low/medium/high)
+        7. Support recommendation for next interaction
         
+        Format your response as JSON.
+        """
         
+        # Get analysis from Gemini
+        print("Requesting conversation analysis from Gemini...")
+        analysis_response = model.generate_content(analysis_prompt)
+        analysis_text = analysis_response.text
+        
+        # Parse the response - this assumes Gemini returns proper JSON
+        # In production, you'd need more robust parsing and error handling
+        try:
+            # Clean up the response to get just the JSON part
+            json_text = analysis_text
+            if "```json" in analysis_text:
+                json_text = analysis_text.split("```json")[1].split("```")[0]
+            elif "```" in analysis_text:
+                json_text = analysis_text.split("```")[1].split("```")[0]
+                
+            analysis_data = json.loads(json_text)
+            
+            # Create or update user profile
+            if user_id not in user_profiles:
+                user_profiles[user_id] = {}
+            
+            # Update profile with new analysis
+            user_profiles[user_id].update({
+                'emotions': analysis_data.get('Primary emotions detected', []),
+                'concerns': analysis_data.get('Main concerns/issues discussed', []),
+                'triggers': analysis_data.get('Potential triggers identified', []),
+                'coping_strategies': analysis_data.get('Coping strategies mentioned or suggested', []),
+                'last_summary': analysis_data.get('Brief summary of the conversation', ''),
+                'distress_level': analysis_data.get('Level of distress detected', 'medium'),
+                'suggestion': analysis_data.get('Support recommendation for next interaction', ''),
+                'last_updated': datetime.now().isoformat()
+            })
+            
+            print(f"Updated user profile for {user_id}")
+            
+        except json.JSONDecodeError as e:
+            print(f"Error parsing analysis response as JSON: {e}")
+            print(f"Raw response: {analysis_text}")
+        
+    except Exception as e:
+        print(f"Error analyzing conversation: {e}")
+
+# Check for inactive sessions and trigger analysis
+def check_inactive_sessions():
+    """Check for inactive sessions and trigger analysis"""
+    current_time = datetime.now()
+    inactive_threshold = timedelta(minutes=30)  # 30 minutes of inactivity
+    
+    for user_id, last_active in list(session_activity.items()):
+        if current_time - last_active > inactive_threshold:
+            # Session is inactive, trigger analysis
+            print(f"Session {user_id} inactive, triggering analysis")
+            analyze_conversation(user_id)
+            # Could remove from session_activity here if desired
+
 @app.route('/')
 def home():
     """Render the home page"""
@@ -156,11 +257,18 @@ def chat():
     response = generate_response(user_id, message)
     
     return jsonify({"response": response})
-    
-    
+
+@app.route('/api/profile/<user_id>', methods=['GET'])
+def get_user_profile(user_id):
+    """API endpoint to get user profile"""
+    if user_id in user_profiles:
+        return jsonify(user_profiles[user_id])
+    else:
+        return jsonify({"error": "User profile not found"}), 404
+
 def test_gemini_api():
     try:
-        model_to_use = "gemini-2.0-flash"  # 👈 Set your desired model here
+        model_to_use = "gemini-2.0-flash"
         model = genai.GenerativeModel(model_to_use)
         
         # Test the model
@@ -171,10 +279,6 @@ def test_gemini_api():
         print(f"API Test failed with error: {str(e)}")
         return False
 
-
-
-
-# Replace your existing if __name__ == '__main__': block with this one
 if __name__ == '__main__':
     print("Testing Gemini API connection...")
     api_working = test_gemini_api()
