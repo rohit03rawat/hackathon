@@ -28,7 +28,13 @@ DATABASE_URL=your_postgres_database_url
 Install Dependencies
 
 bash
-pip install -r requirements.txt
+pip install 
+flask
+python-dotenv
+bcrypt
+supabase
+google-generativeai
+
 Run the App
 
 bash
