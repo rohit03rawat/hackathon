@@ -9,13 +9,14 @@ from supabase import create_client, Client
 
 # Load environment variables
 load_dotenv()
+# Add this after load_dotenv() in your app.py
 
 # Initialize Flask app
 app = Flask(__name__)
 
 # Supabase configuration
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://tiudyykyzjejykhtuiof.supabase.co")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRpdWR5eWt5emplanlraHR1aW9mIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDM4MTE4MDQsImV4cCI6MjA1OTM4NzgwNH0.r-DZfGzrYRIuFtGtIdt-hZAyavcgTck_w7yv8uITYng")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Configure Google Gemini API
