@@ -4,27 +4,14 @@ from datetime import datetime
 from flask import Flask, request, jsonify, render_template
 import google.generativeai as genai
 from dotenv import load_dotenv
-import psycopg2
-from psycopg2 import sql
+from supabase import create_client, Client
 
-# Replace these with your actual connection details
-DATABASE_URL = "postgresql://postgres:[zT9JJxXUa!fgM_&]@db.tiudyykyzjejykhtuiof.supabase.co:5432/postgres>"
+# Load Supabase environment variables
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-# Establishing the connection
-conn = psycopg2.connect(DATABASE_URL)
-cur = conn.cursor()
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Example query to fetch data
-cur.execute("SELECT * FROM users LIMIT 5;")
-rows = cur.fetchall()
-
-# Print the results
-for row in rows:
-    print(row)
-
-# Closing the cursor and connection
-cur.close()
-conn.close()
 
 global model
 # Load environment variables
