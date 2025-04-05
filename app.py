@@ -1,38 +1,29 @@
 import os
 import json
+import uuid
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template
 import google.generativeai as genai
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
-# Load Supabase environment variables
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-
-global model
 # Load environment variables
 load_dotenv()
 
 # Initialize Flask app
 app = Flask(__name__)
 
-# Configure Google Gemini API
-# Replace this line
-api_key = os.getenv("GEMINI_API_KEY")
+# Supabase configuration
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# With this
-api_key = "AIzaSyAn16yV68eU1CEZpZ35YW4FhnikMnEIJWI"  # Replace with your actual API key
+# Configure Google Gemini API
+api_key = os.getenv("GEMINI_API_KEY", "AIzaSyAn16yV68eU1CEZpZ35YW4FhnikMnEIJWI")
 genai.configure(api_key=api_key)
 
 # Initialize Gemini model
 model = genai.GenerativeModel('gemini-2.0-flash')
-
-# Store conversation history
-conversations = {}
 
 def create_system_prompt():
     """Create the system prompt for the therapy chatbot"""
@@ -76,47 +67,140 @@ def get_crisis_response():
     
     These trained professionals can provide the support you need right now. Your life matters."""
 
-def generate_response(user_id, message):
-    """Generate a response using the Gemini API with simplified approach"""
+def ensure_user_exists(user_id):
+    """Ensure the user exists in the database, create if not"""
+    result = supabase.table("users").select("*").eq("user_id", user_id).execute()
     
-    # Move global declaration to the top of the function
-   
+    if not result.data:
+        # User doesn't exist, create a new user
+        supabase.table("users").insert({"user_id": user_id}).execute()
+        
+        # Create a new conversation for this user
+        supabase.table("conversations").insert({
+            "user_id": user_id,
+            "active": True
+        }).execute()
+
+def get_active_conversation(user_id):
+    """Get the active conversation for a user, or create one if none exists"""
+    result = supabase.table("conversations").select("*").eq("user_id", user_id).eq("active", True).execute()
+    
+    if result.data:
+        return result.data[0]["conversation_id"]
+    else:
+        # Create a new conversation for this user
+        result = supabase.table("conversations").insert({
+            "user_id": user_id,
+            "active": True
+        }).execute()
+        return result.data[0]["conversation_id"]
+
+def get_conversation_history(user_id, limit=5):
+    """Get recent conversation history from the database"""
+    conversation_id = get_active_conversation(user_id)
+    
+    result = supabase.table("conversation_messages")\
+        .select("message_id,sequence_num")\
+        .eq("conversation_id", conversation_id)\
+        .order("sequence_num", desc=True)\
+        .limit(limit*2)\
+        .execute()
+    
+    if not result.data:
+        return []
+    
+    message_ids = [entry["message_id"] for entry in result.data]
+    
+    messages_result = supabase.table("messages")\
+        .select("*")\
+        .in_("message_id", message_ids)\
+        .order("timestamp")\
+        .execute()
+    
+    return messages_result.data
+
+def store_message(user_id, content, is_bot):
+    """Store a message in the database and link it to the conversation"""
+    # First, ensure the user exists
+    ensure_user_exists(user_id)
+    
+    # Get the active conversation
+    conversation_id = get_active_conversation(user_id)
+    
+    # Insert the message
+    message_result = supabase.table("messages").insert({
+        "user_id": user_id,
+        "is_bot": is_bot,
+        "content": content
+    }).execute()
+    
+    message_id = message_result.data[0]["message_id"]
+    
+    # Get the next sequence number
+    seq_result = supabase.table("conversation_messages")\
+        .select("sequence_num")\
+        .eq("conversation_id", conversation_id)\
+        .order("sequence_num", desc=True)\
+        .limit(1)\
+        .execute()
+    
+    next_seq = 1
+    if seq_result.data:
+        next_seq = seq_result.data[0]["sequence_num"] + 1
+    
+    # Link message to conversation
+    supabase.table("conversation_messages").insert({
+        "conversation_id": conversation_id,
+        "message_id": message_id,
+        "sequence_num": next_seq
+    }).execute()
+    
+    # If crisis is detected, log it
+    if is_bot == False and check_for_crisis(content):
+        supabase.table("crisis_events").insert({
+            "user_id": user_id,
+            "message_id": message_id,
+            "resources_provided": "Standard crisis resources provided"
+        }).execute()
+    
+    return message_id
+
+def generate_response(user_id, message):
+    """Generate a response using the Gemini API with conversation history from database"""
     
     # Check for crisis indicators first
     if check_for_crisis(message):
-        return get_crisis_response()
+        crisis_response = get_crisis_response()
+        store_message(user_id, message, False)  # Store user message
+        store_message(user_id, crisis_response, True)  # Store bot response
+        return crisis_response
     
-    # Get conversation history or create new
-    if user_id not in conversations:
-        conversations[user_id] = []
+    # Store the user message
+    store_message(user_id, message, False)
     
-    conversation_history = conversations[user_id]
+    # Get conversation history from database
+    conversation_history = get_conversation_history(user_id)
     
     # Create a prompt that includes system instructions and recent context
     system_instructions = create_system_prompt()
     
     # Build a context string with recent conversation history
     context = ""
-    for entry in conversation_history[-3:]:  # Use last 3 messages for context
-        context += f"User: {entry['user_message']}\n"
-        if "bot_response" in entry:
-            context += f"Assistant: {entry['bot_response']}\n"
+    for entry in conversation_history[-10:]:  # Use last 10 messages for context
+        prefix = "User: " if not entry["is_bot"] else "Assistant: "
+        context += f"{prefix}{entry['content']}\n"
     
     # Construct the final prompt
     final_prompt = f"{system_instructions}\n\nConversation History:\n{context}\n\nUser: {message}\nAssistant:"
     
     try:
-        print("Sending simplified request to Gemini API...")
-        response = model.generate_content(final_prompt)  # Model is used after global declaration
+        print("Sending request to Gemini API...")
+        response = model.generate_content(final_prompt)
         bot_response = response.text
         print(f"Received response: {bot_response[:50]}...")  # Print first 50 chars
         
-        # Store in conversation history
-        conversation_history.append({
-            "timestamp": datetime.now().isoformat(),
-            "user_message": message,
-            "bot_response": bot_response
-        })
+        # Store the bot response
+        store_message(user_id, bot_response, True)
         
         return bot_response
     
@@ -125,9 +209,6 @@ def generate_response(user_id, message):
         print(error_msg)
         return f"I'm having trouble responding right now. Technical details: {str(e)}"
 
-
-        
-        
 @app.route('/')
 def home():
     """Render the home page"""
@@ -143,11 +224,31 @@ def chat():
     response = generate_response(user_id, message)
     
     return jsonify({"response": response})
+
+@app.route('/api/history', methods=['GET'])
+def get_history():
+    """API endpoint to get chat history"""
+    user_id = request.args.get('user_id', 'default_user')
     
+    # Ensure user exists
+    ensure_user_exists(user_id)
+    
+    # Get conversation history
+    history = get_conversation_history(user_id, limit=50)
+    
+    formatted_history = []
+    for msg in history:
+        formatted_history.append({
+            "content": msg["content"],
+            "is_bot": msg["is_bot"],
+            "timestamp": msg["timestamp"]
+        })
+    
+    return jsonify({"history": formatted_history})
     
 def test_gemini_api():
     try:
-        model_to_use = "gemini-2.0-flash"  # 👈 Set your desired model here
+        model_to_use = "gemini-2.0-flash"
         model = genai.GenerativeModel(model_to_use)
         
         # Test the model
@@ -158,15 +259,25 @@ def test_gemini_api():
         print(f"API Test failed with error: {str(e)}")
         return False
 
+def test_supabase_connection():
+    try:
+        # Try to query the users table
+        result = supabase.table("users").select("*").limit(1).execute()
+        print("Supabase connection test successful!")
+        return True
+    except Exception as e:
+        print(f"Supabase connection test failed with error: {str(e)}")
+        return False
 
-
-
-# Replace your existing if __name__ == '__main__': block with this one
 if __name__ == '__main__':
     print("Testing Gemini API connection...")
     api_working = test_gemini_api()
-    if api_working:
-        print("API test successful, starting Flask app...")
+    
+    print("Testing Supabase connection...")
+    db_working = test_supabase_connection()
+    
+    if api_working and db_working:
+        print("All tests successful, starting Flask app...")
         app.run(debug=True, port=5000)
     else:
-        print("API test failed. Please check your API key and internet connection.")
+        print("Startup tests failed. Please check your API keys and database connection.")
