@@ -4,6 +4,27 @@ from datetime import datetime
 from flask import Flask, request, jsonify, render_template
 import google.generativeai as genai
 from dotenv import load_dotenv
+import psycopg2
+from psycopg2 import sql
+
+# Replace these with your actual connection details
+DATABASE_URL = "postgres://<username>:<password>@<host>:<port>/<database_name>"
+
+# Establishing the connection
+conn = psycopg2.connect(postgresql://postgres:[zT9JJxXUa!fgM_&]@db.tiudyykyzjejykhtuiof.supabase.co:5432/postgres)
+cur = conn.cursor()
+
+# Example query to fetch data
+cur.execute("SELECT * FROM users LIMIT 5;")
+rows = cur.fetchall()
+
+# Print the results
+for row in rows:
+    print(row)
+
+# Closing the cursor and connection
+cur.close()
+conn.close()
 
 global model
 # Load environment variables
